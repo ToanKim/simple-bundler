@@ -4,8 +4,6 @@ const babelTraverse = require("@babel/traverse").default;
 const nodePath = require("path");
 const babelCore = require("@babel/core");
 
-let id = 0;
-
 function buildAsset(filename) {
   const content = fs.readFileSync(filename, {
     encoding: "utf-8",
@@ -16,19 +14,22 @@ function buildAsset(filename) {
   });
 
   const dependencies = [];
+  const dirname = nodePath.dirname(filename);
 
   babelTraverse(ast, {
     ImportDeclaration: ({ node }) => {
-      dependencies.push(node.source.value);
+      const absolutePath = nodePath.join(dirname, node.source.value);
+      node.source.value = absolutePath;
+
+      dependencies.push(absolutePath);
     },
   });
 
-  const { code } = babelCore.transformFromAstSync(ast, '', {
-    presets: ['@babel/preset-env']
+  const { code } = babelCore.transformFromAstSync(ast, "", {
+    presets: ["@babel/preset-env"],
   });
 
   return {
-    id: id++,
     filename,
     dependencies,
     code,
@@ -38,63 +39,64 @@ function buildAsset(filename) {
 function buildGraph(entry) {
   const mainAsset = buildAsset(entry);
   const queue = [mainAsset];
+  const graph = {
+    [mainAsset.filename]: mainAsset,
+  };
 
   for (const asset of queue) {
-    const dirname = nodePath.dirname(asset.filename);
+    asset.dependencies.forEach((absolutePath) => {
+      if (graph[absolutePath]) return;
 
-    asset.mapping = {};
-
-    asset.dependencies.forEach((relativePath) => {
-      const absolutePath = nodePath.join(dirname, relativePath);
       const child = buildAsset(absolutePath);
-
-      asset.mapping[relativePath] = child.id;
-
+      graph[child.filename] = child;
       queue.push(child);
     });
   }
 
-  return queue;
+  return graph;
 }
 
-function bundle(graph) {
+function bundle(graph, entry) {
   let modules = "";
 
-  graph.forEach(module => {
+  Object.values(graph).forEach((module) => {
     modules += `
-        ${module.id}: [
-          function (require, module, exports) {
-            ${module.code}
-          },
-          ${JSON.stringify(module.mapping)}
-        ],
-    `
-  })
+        "${module.filename}": function (require, module, exports) {
+          ${module.code}
+        },
+    `;
+  });
 
   const result = `
     (function(modules) {
-      function require(id) {
-        const [fn, mapping] = modules[id];
 
-        function localRequire(relativePath) {
-          return require(mapping[relativePath]);
+      const cache = {};
+
+      function require(id) {
+        if (cache[id]) {
+          return cache[id].exports;
         }
+
+        const fn = modules[id];
 
         const module = { exports: {} };
 
-        fn(localRequire, module, module.exports);
+        fn(require, module, module.exports);
 
-        return module.exports
+        cache[id] = module;
+
+        return module.exports;
       }
 
-      require(0);
+      require("${entry}");
     })({ ${modules} })
-  `
+  `;
 
   return result;
 }
 
-const graph = buildGraph("./src/index.js");
-const result = bundle(graph)
+const entry = "src/index.js";
+const graph = buildGraph(entry);
+const result = bundle(graph, entry);
 
 console.log(result);

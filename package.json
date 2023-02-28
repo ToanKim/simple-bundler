@@ -9,6 +9,6 @@
     "webpack-cli": "^5.0.1"
   },
   "scripts": {
-    "bundle": "webpack-cli build ./src/index.js"
+    "bundle": "node bundle.js > output.js"
   }
 }
